@@ -4,3 +4,4 @@ torch
 pillow
 tqdm
 seaborn
+pika

@@ -197,13 +197,18 @@ async def save_approved(approval_data: Dict[str, Any] = Body(...)) -> Dict:
         os.makedirs(img_path, exist_ok=True)
         os.makedirs(txt_path, exist_ok=True)
 
+
+        # --- UNIQUE FILENAMES PER MODEL ---
+        stem, ext = os.path.splitext(filename)
+        unique_img_filename = f"{stem}_{model_name}{ext}"
+        unique_txt_filename = f"{stem}_{model_name}.txt"
+
         img_data = base64.b64decode(original_base64)
-        full_img_path = os.path.join(img_path, filename)
+        full_img_path = os.path.join(img_path, unique_img_filename)
         with open(full_img_path, "wb") as img_file:
             img_file.write(img_data)
 
-        txt_filename = os.path.splitext(filename)[0] + ".txt"
-        full_txt_path = os.path.join(txt_path, txt_filename)
+        full_txt_path = os.path.join(txt_path, unique_txt_filename)
         with open(full_txt_path, "w") as txt_file:
             txt_file.write(json.dumps({
                 "model": model_name,
@@ -213,7 +218,7 @@ async def save_approved(approval_data: Dict[str, Any] = Body(...)) -> Dict:
 
         return {
             "success": True,
-            "message": f"Saved {'approved' if approved else 'not approved'} data for {filename}"
+            "message": f"Saved {'approved' if approved else 'not approved'} data for {unique_img_filename}"
         }
 
     except Exception as e:

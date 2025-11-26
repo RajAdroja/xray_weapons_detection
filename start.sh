@@ -26,4 +26,10 @@ echo "Setup complete. Activate with: source yolov5_api_venv/bin/activate"
 echo "Place your model at: model/best.pt"
 echo "Run with: uvicorn main:app --reload"
 
-python -m uvicorn main:app --reload
+python -m uvicorn main:app --reload &
+
+echo "Starting frontend..."
+cd yolo-predictor
+npm install
+npm start
+cd ..

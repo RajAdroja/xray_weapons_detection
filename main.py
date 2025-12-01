@@ -38,9 +38,9 @@ async def startup_event():
         # Start result consumer and status consumer
         asyncio.create_task(consume_results())
         asyncio.create_task(consume_status_updates())
-        print("✅ RabbitMQ connection established")
+        print("RabbitMQ connection established")
     except Exception as e:
-        print(f"⚠️  Could not connect to RabbitMQ: {e}")
+        print(f"Could not connect to RabbitMQ: {e}")
         print("   Continuing with synchronous processing only")
 
 async def consume_results():
@@ -64,7 +64,7 @@ async def process_status_update(status_data: dict):
         status = status_data.get("status")
         error = status_data.get("error")
         
-        print(f"📊 Received status update for task {task_id}: {status}")
+        print(f"Received status update for task {task_id}: {status}")
         
         # Convert string status to TaskStatus enum
         task_status = TaskStatus(status) if status in [s.value for s in TaskStatus] else TaskStatus.PENDING
@@ -74,7 +74,7 @@ async def process_status_update(status_data: dict):
         else:
             task_manager.update_task_status(task_id, task_status)
             
-        print(f"✅ Updated task {task_id} status to {status}")
+        print(f"Updated task {task_id} status to {status}")
         
     except Exception as e:
         print(f"Error processing status update: {e}")
@@ -82,7 +82,7 @@ async def process_status_update(status_data: dict):
 async def process_result(result_data: dict, correlation_id: str):
     """Process incoming results from workers"""
     try:
-        print(f"📨 Received result for correlation_id: {correlation_id}")
+        print(f"Received result for correlation_id: {correlation_id}")
         
         # Extract the base task_id from correlation_id (remove the suffix -0, -1, etc.)
         # correlation_id format: "task_id-index" (e.g., "uuid-0", "uuid-1")
@@ -90,7 +90,7 @@ async def process_result(result_data: dict, correlation_id: str):
         
         # Add the result to the task manager
         task_manager.add_result(task_id, result_data)
-        print(f"✅ Updated task {task_id} with result from correlation_id {correlation_id}")
+        print(f"Updated task {task_id} with result from correlation_id {correlation_id}")
         
     except Exception as e:
         print(f"Error processing result: {e}")
@@ -131,7 +131,7 @@ try:
 
     MODELS["yolov5"].eval()
 except Exception as e:
-    print("❌ Error loading models:", e)
+    print("Error loading models:", e)
     MODELS = {}
 
 # Helper: safely get model names for enum

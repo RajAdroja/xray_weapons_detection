@@ -9,10 +9,14 @@ import io
 import base64
 import os
 import json
+import uuid
+import asyncio
 from PIL import Image
 from pathlib import Path
 from typing import List, Dict, Any
 from ultralytics import YOLO
+from rabbitmq_service import rabbitmq_service
+from task_manager import task_manager, TaskStatus
 
 app = FastAPI()
 
@@ -23,6 +27,78 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize RabbitMQ connection on startup"""
+    try:
+        await rabbitmq_service.connect()
+        # Start cleanup scheduler
+        asyncio.create_task(task_manager.start_cleanup_scheduler())
+        # Start result consumer and status consumer
+        asyncio.create_task(consume_results())
+        asyncio.create_task(consume_status_updates())
+        print("✅ RabbitMQ connection established")
+    except Exception as e:
+        print(f"⚠️  Could not connect to RabbitMQ: {e}")
+        print("   Continuing with synchronous processing only")
+
+async def consume_results():
+    """Consume results from the result queue"""
+    try:
+        await rabbitmq_service.consume_results(process_result)
+    except Exception as e:
+        print(f"Error in result consumer: {e}")
+
+async def consume_status_updates():
+    """Consume status updates from the status queue"""
+    try:
+        await rabbitmq_service.consume_status_updates(process_status_update)
+    except Exception as e:
+        print(f"Error in status consumer: {e}")
+
+async def process_status_update(status_data: dict):
+    """Process incoming status updates from workers"""
+    try:
+        task_id = status_data.get("task_id")
+        status = status_data.get("status")
+        error = status_data.get("error")
+        
+        print(f"📊 Received status update for task {task_id}: {status}")
+        
+        # Convert string status to TaskStatus enum
+        task_status = TaskStatus(status) if status in [s.value for s in TaskStatus] else TaskStatus.PENDING
+        
+        if error:
+            task_manager.update_task_status(task_id, task_status, error)
+        else:
+            task_manager.update_task_status(task_id, task_status)
+            
+        print(f"✅ Updated task {task_id} status to {status}")
+        
+    except Exception as e:
+        print(f"Error processing status update: {e}")
+
+async def process_result(result_data: dict, correlation_id: str):
+    """Process incoming results from workers"""
+    try:
+        print(f"📨 Received result for correlation_id: {correlation_id}")
+        
+        # Extract the base task_id from correlation_id (remove the suffix -0, -1, etc.)
+        # correlation_id format: "task_id-index" (e.g., "uuid-0", "uuid-1")
+        task_id = correlation_id.rsplit('-', 1)[0] if '-' in correlation_id else correlation_id
+        
+        # Add the result to the task manager
+        task_manager.add_result(task_id, result_data)
+        print(f"✅ Updated task {task_id} with result from correlation_id {correlation_id}")
+        
+    except Exception as e:
+        print(f"Error processing result: {e}")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Close RabbitMQ connection on shutdown"""
+    await rabbitmq_service.close()
 
 # Serve static files (e.g., upload.html)
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
@@ -173,6 +249,83 @@ async def predict_all(files: List[UploadFile] = File(...)) -> List[Dict]:
         })
 
     return results_data
+
+@app.post("/predict-async/")
+async def predict_async(files: List[UploadFile] = File(...)) -> Dict:
+    """Submit prediction job for async processing"""
+    try:
+        task_id = str(uuid.uuid4())
+        files_data = []
+        
+        # Process uploaded files
+        for file in files:
+            contents = await file.read()
+            file_base64 = base64.b64encode(contents).decode("utf-8")
+            files_data.append({
+                "filename": file.filename,
+                "file_data": file_base64
+            })
+        
+        # Create task in task manager
+        task_manager.create_task(task_id, files_data)
+        
+        # Publish each file as a separate task to RabbitMQ
+        for i, file_data in enumerate(files_data):
+            # Create unique correlation ID for each file but keep task_id for grouping
+            file_task_id = f"{task_id}-{i}"
+            await rabbitmq_service.publish_prediction_task({
+                "task_id": task_id,  # Original task ID for grouping
+                "file_task_id": file_task_id,  # Unique ID for this file
+                "filename": file_data["filename"],
+                "file_data": file_data["file_data"]
+            })
+        
+        return {
+            "task_id": task_id,
+            "status": "submitted",
+            "files_count": len(files_data),
+            "message": "Prediction job submitted successfully"
+        }
+    
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e)}
+        )
+
+@app.get("/task-status/{task_id}")
+async def get_task_status(task_id: str) -> Dict:
+    """Get the status of a prediction task"""
+    task = task_manager.get_task(task_id)
+    if not task:
+        return JSONResponse(
+            status_code=404,
+            content={"error": "Task not found"}
+        )
+    
+    return task
+
+@app.get("/task-results/{task_id}")
+async def get_task_results(task_id: str) -> List[Dict]:
+    """Get the results of a completed prediction task"""
+    task = task_manager.get_task(task_id)
+    if not task:
+        return JSONResponse(
+            status_code=404,
+            content={"error": "Task not found"}
+        )
+    
+    if task["status"] != TaskStatus.COMPLETED.value:
+        return JSONResponse(
+            status_code=202,
+            content={
+                "message": "Task not completed yet",
+                "status": task["status"],
+                "progress": f"{task['processed_count']}/{task['files_count']}"
+            }
+        )
+    
+    return task["results"]
 
 @app.post("/save-approved/")
 async def save_approved(approval_data: Dict[str, Any] = Body(...)) -> Dict:

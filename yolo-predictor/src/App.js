@@ -31,6 +31,9 @@ function App() {
     isOpen: false,
     imgSrc: "",
   });
+  const [processingMode, setProcessingMode] = useState("sync"); // "sync" or "async"
+  const [currentTaskId, setCurrentTaskId] = useState(null);
+  const [pollingInterval, setPollingInterval] = useState(null);
 
   // Fetch model info once
   useEffect(() => {
@@ -144,6 +147,15 @@ function App() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!selectedFiles.length) return;
+
+    if (processingMode === "sync") {
+      await handleSyncSubmit();
+    } else {
+      await handleAsyncSubmit();
+    }
+  };
+
+  const handleSyncSubmit = async () => {
     setLoading(true);
     setError("");
     setResults([]);
@@ -164,6 +176,70 @@ function App() {
       setLoading(false);
     }
   };
+
+  const handleAsyncSubmit = async () => {
+    setLoading(true);
+    setError("");
+    setResults([]);
+    setApprovalStatus({});
+
+    const formData = new FormData();
+    selectedFiles.forEach((f) => formData.append("files", f));
+
+    try {
+      const res = await axios.post("/predict-async/", formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+
+      setCurrentTaskId(res.data.task_id);
+      setActiveTab("results");
+
+      // Start polling for results
+      startPolling(res.data.task_id);
+    } catch (err) {
+      setError(err.message);
+      setLoading(false);
+    }
+  };
+
+  const startPolling = (taskId) => {
+    const interval = setInterval(async () => {
+      try {
+        const statusRes = await axios.get(`/task-status/${taskId}`);
+        const task = statusRes.data;
+
+        if (task.status === "completed") {
+          const resultsRes = await axios.get(`/task-results/${taskId}`);
+          setResults(resultsRes.data);
+          setLoading(false);
+          clearInterval(interval);
+          setCurrentTaskId(null);
+        } else if (task.status === "failed") {
+          setError(task.error || "Processing failed");
+          setLoading(false);
+          clearInterval(interval);
+          setCurrentTaskId(null);
+        }
+        // Continue polling if still processing
+      } catch (err) {
+        setError("Error checking task status");
+        setLoading(false);
+        clearInterval(interval);
+        setCurrentTaskId(null);
+      }
+    }, 2000); // Poll every 2 seconds
+
+    setPollingInterval(interval);
+  };
+
+  // Cleanup polling on unmount
+  React.useEffect(() => {
+    return () => {
+      if (pollingInterval) {
+        clearInterval(pollingInterval);
+      }
+    };
+  }, [pollingInterval]);
 
   // Simple API tester
   const callEndpoint = async (ep) => {
@@ -217,6 +293,27 @@ function App() {
         <section className="upload-panel">
           <h2>Upload Baggage Scan Images</h2>
           <form onSubmit={handleSubmit} className="upload-form">
+            <div className="processing-mode-toggle">
+              <label>
+                <input
+                  type="radio"
+                  value="sync"
+                  checked={processingMode === "sync"}
+                  onChange={(e) => setProcessingMode(e.target.value)}
+                />
+                <span>Synchronous (Wait for results)</span>
+              </label>
+              <label>
+                <input
+                  type="radio"
+                  value="async"
+                  checked={processingMode === "async"}
+                  onChange={(e) => setProcessingMode(e.target.value)}
+                />
+                <span>Asynchronous (Background processing)</span>
+              </label>
+            </div>
+
             <div
               className={`dropzone ${selectedFiles.length ? "has-file" : ""}`}
               onDrop={handleDrop}
@@ -265,12 +362,20 @@ function App() {
               {loading ? (
                 <>
                   <div className="spinner" />
-                  <span>Analyzing…</span>
+                  <span>
+                    {processingMode === "async" && currentTaskId
+                      ? "Processing in background..."
+                      : "Analyzing…"}
+                  </span>
                 </>
               ) : (
                 <>
                   <i className="fas fa-search" />
-                  <span>Detect Objects</span>
+                  <span>
+                    {processingMode === "sync"
+                      ? "Detect Objects"
+                      : "Submit for Processing"}
+                  </span>
                 </>
               )}
             </button>
@@ -279,6 +384,17 @@ function App() {
             <p className="error">
               <i className="fas fa-exclamation-circle" /> {error}
             </p>
+          )}
+
+          {currentTaskId && (
+            <div className="task-info">
+              <p>
+                <i className="fas fa-clock" /> Task ID: {currentTaskId}
+              </p>
+              <p>
+                Processing in background... Results will appear automatically.
+              </p>
+            </div>
           )}
         </section>
 

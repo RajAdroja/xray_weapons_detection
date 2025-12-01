@@ -5,3 +5,7 @@ pillow
 tqdm
 seaborn
 pika
+celery
+redis
+aio-pika
+asyncio
